@@ -1,0 +1,16 @@
+{
+  "name": "chatbot_project",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "concurrently \"npm run start:backend\" \"npm run dev --prefix chatbot-frontend\"",
+    "start:backend": "cd chatbot-backend && npm start"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
