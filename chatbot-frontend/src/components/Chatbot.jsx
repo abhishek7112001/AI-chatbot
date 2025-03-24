@@ -33,13 +33,24 @@ const Chatbot = () => {
 
     const fetchLogs = async () => {
       try {
-        const response = await fetch("https://api.example.com/cloudwatch-logs");
+        const response = await fetch("https://n2m0fyvb62.execute-api.ap-south-1.amazonaws.com/prod/chat", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({}) // Include an empty body if required
+        });
+    
+        if (!response.ok) throw new Error("Failed to fetch logs");
+    
         const data = await response.json();
         setLogs(data.logs || []);
       } catch (error) {
         console.error("Error fetching logs:", error);
       }
     };
+    
+    
 
     fetchUserDetails();
     fetchLogs();
@@ -75,11 +86,36 @@ const Chatbot = () => {
     }
   };
 
-  const handleSearch = () => {
-    if (query.trim() !== "") {
-      setResponse(`You searched for: "${query}"`);
+  const handleSearch = async () => {
+    if (!query.trim()) return; // Prevent empty queries
+  
+    try {
+      const response = await fetch("https://n2m0fyvb62.execute-api.ap-south-1.amazonaws.com/prod/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${localStorage.getItem("token")}`, // Ensure authentication if required
+        },
+        body: JSON.stringify({ prompt: query }), // Match AWS API Gateway format
+      });
+  
+      if (!response.ok) throw new Error(`Query failed with status: ${response.status}`);
+  
+      const data = await response.json();
+  
+      // Ensure correct handling of response
+      if (data && data.response) {
+        setResponse(data.response);
+      } else {
+        setResponse("No valid response received.");
+      }
+    } catch (error) {
+      console.error("Error fetching response:", error);
+      setResponse("Error fetching response. Please try again.");
     }
   };
+  
+  
 
   return (
     <div className="flex min-h-screen bg-gray-100 text-black">
