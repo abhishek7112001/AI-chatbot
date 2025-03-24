@@ -33,22 +33,28 @@ const Chatbot = () => {
 
     const fetchLogs = async () => {
       try {
-        const response = await fetch("https://n2m0fyvb62.execute-api.ap-south-1.amazonaws.com/prod/chat", {
+        const response = await fetch("https://zeyqlv160j.execute-api.ap-south-1.amazonaws.com/prod/SupportBackendHandler", {
           method: "POST",
           headers: {
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
           },
-          body: JSON.stringify({}) // Include an empty body if required
+          body: JSON.stringify({ prompt: query }), // Make sure query is defined
+          mode: "cors",  // Ensure CORS is set
         });
     
-        if (!response.ok) throw new Error("Failed to fetch logs");
+        if (!response.ok) {
+          throw new Error(`HTTP error! Status: ${response.status}`);
+        }
     
-        const data = await response.json();
-        setLogs(data.logs || []);
+        const data = await response.json();  // Parse JSON response
+        console.log("Response Data:", data);  // Check response in console
+    
+        setChatResponse(data.message);  // Ensure state updates correctly
       } catch (error) {
         console.error("Error fetching logs:", error);
       }
     };
+    
     
     
 
@@ -87,23 +93,23 @@ const Chatbot = () => {
   };
 
   const handleSearch = async () => {
-    if (!query.trim()) return; // Prevent empty queries
+    if (!query.trim()) return;
   
     try {
-      const response = await fetch("https://n2m0fyvb62.execute-api.ap-south-1.amazonaws.com/prod/chat", {
+      const response = await fetch("https://zeyqlv160j.execute-api.ap-south-1.amazonaws.com/prod/SupportBackendHandler", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ prompt: query }), // Ensure correct format
+        body: JSON.stringify({ prompt: query }),
+        mode: "cors",
       });
+  
+      console.log("Response status:", response.status);
       
-  
-      if (!response.ok) throw new Error(`Query failed with status: ${response.status}`);
-  
       const data = await response.json();
+      console.log("API Response:", data);  // Log response in console
   
-      // Ensure correct handling of response
       if (data && data.response) {
         setResponse(data.response);
       } else {
@@ -114,6 +120,7 @@ const Chatbot = () => {
       setResponse("Error fetching response. Please try again.");
     }
   };
+  
   
   
 
