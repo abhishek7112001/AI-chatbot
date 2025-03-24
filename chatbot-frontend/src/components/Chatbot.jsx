@@ -94,10 +94,10 @@ const Chatbot = () => {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${localStorage.getItem("token")}`, // Ensure authentication if required
         },
-        body: JSON.stringify({ prompt: query }), // Match AWS API Gateway format
+        body: JSON.stringify({ prompt: query }), // Ensure correct format
       });
+      
   
       if (!response.ok) throw new Error(`Query failed with status: ${response.status}`);
   
@@ -124,7 +124,7 @@ const Chatbot = () => {
         <div className="text-sm space-y-2 flex-1 flex items-center justify-center">
           {logs.length > 0 ? logs.map((log, index) => (
             <p key={index} className="bg-gray-800 p-2 rounded">{log}</p>
-          )) : <p className="text-gray-400">Loading logs...</p>}
+          )) : <p className="text-gray-400">If an error detected it will be printed here.</p>}
         </div>
       </div>
 
