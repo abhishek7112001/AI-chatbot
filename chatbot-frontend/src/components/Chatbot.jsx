@@ -94,9 +94,9 @@ const Chatbot = () => {
     if (!file) return;
   
     setUploadedFile(file);
-    console.log("File selected:", file.name);
+    console.log("📂 File selected:", file.name);
   
-    // S3 Upload Configuration
+    // Initialize S3 client with environment variables
     const s3 = new AWS.S3({
       accessKeyId: import.meta.env.VITE_AWS_ACCESS_KEY_ID2,
       secretAccessKey: import.meta.env.VITE_AWS_SECRET_ACCESS_KEY2,
@@ -104,22 +104,22 @@ const Chatbot = () => {
     });
   
     const params = {
-      Bucket: import.meta.env.VITE_S3_BUCKET_NAME, // Your S3 bucket name
-      Key: `uploads/${Date.now()}_${file.name}`, // Unique filename
+      Bucket: import.meta.env.VITE_S3_BUCKET_NAME, // S3 bucket name from .env
+      Key: `${Date.now()}_${file.name}`, // Unique filename with timestamp
       Body: file,
-      ContentType: file.type,
-      ACL: "public-read", // Makes the file publicly accessible (optional)
+      ContentType: file.type, // Preserve correct MIME type
     };
   
     try {
       const uploadResult = await s3.upload(params).promise();
-      console.log("File uploaded successfully:", uploadResult.Location);
+      console.log("✅ File uploaded successfully:", uploadResult.Location);
       alert("File uploaded successfully!");
     } catch (error) {
-      console.error("Error uploading file:", error);
-      alert("Failed to upload file.");
+      console.error("❌ Error uploading file:", error);
+      alert("Failed to upload file. Check console for details.");
     }
   };
+  
   
 
   const handleSearch = async () => {
