@@ -12,7 +12,7 @@ app.use(express.json());
 app.use(cors());
 
 app.use("/api/users", require("./routes/userRoutes"));
-app.use("/api/logs", require("./routes/logRoutes"));
+app.use("/api/debugroutes", require("./routes/debugRoutes"));
 
 app.get("/", (req, res) => res.send("Backend API Running"));
 
