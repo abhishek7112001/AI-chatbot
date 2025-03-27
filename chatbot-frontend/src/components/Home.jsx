@@ -10,7 +10,7 @@ const HomePage = () => {
   return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-white text-black">
       <h1 className="font-[Press Start 2P] text-5xl mb-6 text-center">
-        Hey, I'm your L1 Support BOT
+        Hey, I'm your AWS Debugger Bot
       </h1>
       <FaRobot className="text-9xl mb-6" /> {/* Bot icon size increased */}
       <div className="flex border-4 border-black rounded-md overflow-hidden w-[40rem]">
