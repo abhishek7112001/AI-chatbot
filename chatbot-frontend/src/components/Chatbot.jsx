@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { FaSignOutAlt, FaRobot, FaPlus, FaSearch, FaBars } from "react-icons/fa";
+import { FaSignOutAlt, FaRobot, FaSearch } from "react-icons/fa";
 import { ClipLoader } from "react-spinners";
 import axios from "axios";
 import AWS from "aws-sdk";
@@ -8,16 +8,14 @@ import AWS from "aws-sdk";
 const Chatbot = () => {
   const navigate = useNavigate();
   const [username, setUsername] = useState("User");
-  const [response, setResponse] = useState("");
   const [query, setQuery] = useState("");
-  const [uploadedFile, setUploadedFile] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [searchHistory, setSearchHistory] = useState([]);
   const [selectedChat, setSelectedChat] = useState(null);
-  const [isHistoryOpen, setIsHistoryOpen] = useState(true);
-  const fileInputRef = useRef(null);
+  const [logs, setLogs] = useState([]);
+  const [metrics, setMetrics] = useState({ invocations: 0, avgDuration: 0 });
+  const chatContainerRef = useRef(null);
 
-  // AWS Configuration
   AWS.config.update({
     region: import.meta.env.VITE_AWS_REGION || "ap-south-1",
     accessKeyId: import.meta.env.VITE_AWS_ACCESS_KEY_ID,
@@ -25,344 +23,277 @@ const Chatbot = () => {
   });
 
   const lambda = new AWS.Lambda();
+  const cloudwatch = new AWS.CloudWatchLogs();
+  const cloudwatchMetrics = new AWS.CloudWatch();
 
   useEffect(() => {
     const token = localStorage.getItem("token");
-    if (!token) {
-      navigate("/");
-      return;
-    }
+    if (!token) navigate("/");
 
-    const fetchUserDetails = async () => {
+    const initializeUser = async () => {
       try {
         const response = await fetch(`${import.meta.env.VITE_BACKEND_URL}/users/me`, {
-          method: "GET",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
+          headers: { Authorization: `Bearer ${token}` },
         });
-        if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
         const data = await response.json();
         setUsername(data.name || "User");
         await loadChatHistory(token);
+        await handleNewChat(); // Create new chat on login
+        await fetchLogsAndMetrics();
       } catch (error) {
-        console.error("Error fetching user details:", error.message);
-        if (error.message.includes("401")) {
-          localStorage.removeItem("token");
-          navigate("/");
-        }
+        console.error("Initialization error:", error);
+        if (error.message.includes("401")) navigate("/");
       }
     };
 
-    fetchUserDetails();
+    initializeUser();
   }, [navigate]);
 
+  const fetchLogsAndMetrics = async () => {
+    try {
+      const logParams = {
+        logGroupName: import.meta.env.VITE_AWS_LOG_GROUP_NAME || `/aws/lambda/${import.meta.env.VITE_AWS_LAMBDA_FUNCTION_NAME || "SupportBackendHandler"}`,
+        limit: 50,
+      };
+      const logResult = await cloudwatch.filterLogEvents(logParams).promise();
+      setLogs(logResult.events?.map(event => ({
+        timestamp: new Date(event.timestamp).toLocaleString(),
+        message: event.message.trim(),
+      })) || []);
+
+      const metricParams = {
+        EndTime: Math.floor(Date.now() / 1000),
+        StartTime: Math.floor((Date.now() - 86400000) / 1000),
+        Namespace: "AWS/Lambda",
+        Period: 3600,
+        Dimensions: [{ Name: "FunctionName", Value: import.meta.env.VITE_AWS_LAMBDA_FUNCTION_NAME }],
+      };
+
+      const [invocations, duration] = await Promise.all([
+        cloudwatchMetrics.getMetricStatistics({ ...metricParams, MetricName: "Invocations", Statistics: ["Sum"] }).promise(),
+        cloudwatchMetrics.getMetricStatistics({ ...metricParams, MetricName: "Duration", Statistics: ["Average"] }).promise(),
+      ]);
+
+      setMetrics({
+        invocations: invocations.Datapoints?.reduce((sum, point) => sum + (point.Sum || 0), 0) || 0,
+        avgDuration: duration.Datapoints?.reduce((sum, point) => sum + (point.Average || 0), 0) / duration.Datapoints.length || 0,
+      });
+    } catch (error) {
+      console.error("Monitoring error:", error);
+      setLogs([{ timestamp: new Date().toLocaleString(), message: `Error: ${error.message}` }]);
+    }
+  };
+
   const loadChatHistory = async (token) => {
-    if (!token) return;
+    try {
+      const { data } = await axios.get(`${import.meta.env.VITE_BACKEND_URL}/api/chats`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      setSearchHistory(data);
+    } catch (error) {
+      console.error("History load error:", error.message);
+    }
+  };
+
+  const handleNewChat = async () => {
+    const token = localStorage.getItem("token");
+    const newSession = { sessionId: Date.now().toString(), messages: [] };
 
     try {
-      const res = await axios.get(`${import.meta.env.VITE_BACKEND_URL}/chats`, {
+      const backendUrl = import.meta.env.VITE_BACKEND_URL;
+      const chatEndpoint = `${backendUrl}/api/chats`;
+      const { data } = await axios.post(chatEndpoint, newSession, {
         headers: { Authorization: `Bearer ${token}` },
       });
 
-      const formattedHistory = res.data.map((chat) => {
-        const firstMessage = chat.messages?.[0] || {};
-        return {
-          sessionId: chat.sessionId,
-          prompt: firstMessage.prompt || "Unknown prompt",
-          response: firstMessage.response || "Unknown response",
-          messages: chat.messages || [],
-          timestamp: chat.timestamp || chat.createdAt,
-          _id: chat._id,
-        };
-      });
-
-      setSearchHistory(formattedHistory);
-      setSelectedChat(null);
-      setResponse("");
+      setSearchHistory(prev => [data.chat, ...prev]);
+      setSelectedChat(data.chat);
+      setQuery("");
     } catch (error) {
-      console.error("Error loading chat history:", error.message);
-      if (error.response?.status === 401) {
-        localStorage.removeItem("token");
-        navigate("/");
-      }
+      console.error("Error creating new chat:", error.response || error);
+      // Fallback to local state if backend fails
+      setSelectedChat(newSession);
+      setQuery("");
+      // alert("Failed to save new chat to backend. Using local session.");
     }
-  };
-
-  const handleNewChat = () => {
-    setSelectedChat(null);
-    setResponse("");
-    setQuery("");
   };
 
   const handleLogout = async () => {
-    const token = localStorage.getItem("token");
-    if (!token) {
-      navigate("/");
-      return;
-    }
-
-    try {
-      await fetch(`${import.meta.env.VITE_BACKEND_URL}/users/logout`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-      });
-      localStorage.removeItem("token");
-      navigate("/");
-    } catch (error) {
-      console.error("Logout error:", error.message);
-      navigate("/");
-    }
-  };
-
-  const handleFileUpload = async (event) => {
-    const file = event.target.files[0];
-    if (!file) return;
-
-    setUploadedFile(file);
-    const s3 = new AWS.S3({
-      accessKeyId: import.meta.env.VITE_AWS_ACCESS_KEY_ID,
-      secretAccessKey: import.meta.env.VITE_AWS_SECRET_ACCESS_KEY,
-      region: import.meta.env.VITE_AWS_REGION || "ap-south-1",
-    });
-
-    const params = {
-      Bucket: import.meta.env.VITE_S3_BUCKET_NAME,
-      Key: `${Date.now()}_${file.name}`,
-      Body: file,
-      ContentType: file.type,
-    };
-
-    try {
-      await s3.upload(params).promise();
-      alert("File uploaded successfully!");
-    } catch (error) {
-      console.error("Error uploading file:", error);
-      alert("Failed to upload file.");
-    }
+    localStorage.removeItem("token");
+    navigate("/");
   };
 
   const handleSearch = async () => {
-    if (!query.trim()) {
-      setResponse("⚠️ Please enter a valid query.");
-      return;
-    }
-
-    const token = localStorage.getItem("token");
-    if (!token) {
-      navigate("/");
-      return;
-    }
-
+    if (!query.trim()) return alert("Please enter a query");
     setIsLoading(true);
-    setResponse("");
 
     try {
-      // Initialize new chat if none selected
-      if (!selectedChat) {
-        setSelectedChat({
-          sessionId: `session_${Date.now()}`,
-          prompt: "",
-          response: "",
-          messages: [],
-          _id: null,
-          timestamp: new Date().toISOString(),
-        });
-      }
+      const token = localStorage.getItem("token");
+      if (!token) throw new Error("No authentication token found");
+
+      const backendUrl = import.meta.env.VITE_BACKEND_URL;
+      if (!backendUrl) throw new Error("Backend URL not defined");
 
       const lambdaParams = {
         FunctionName: import.meta.env.VITE_AWS_LAMBDA_FUNCTION_NAME,
-        InvocationType: "RequestResponse",
-        Payload: JSON.stringify({
-          body: JSON.stringify({ prompt: query }),
-        }),
+        Payload: JSON.stringify({ body: JSON.stringify({ prompt: query }) }),
       };
-
-      const lambdaResult = await lambda.invoke(lambdaParams).promise();
-      if (lambdaResult.FunctionError) {
-        throw new Error(`Lambda execution failed: ${lambdaResult.Payload}`);
-      }
-
-      let lambdaData = JSON.parse(lambdaResult.Payload);
+      const { Payload } = await lambda.invoke(lambdaParams).promise();
+      let lambdaData = JSON.parse(Payload);
       if (typeof lambdaData.body === "string") lambdaData = JSON.parse(lambdaData.body);
 
-      const bedrockResponse = lambdaData.response || "No valid response from Bedrock";
-
-      const newChat = {
-        messages: [{
-          prompt: query,
-          response: bedrockResponse,
-        }]
-      };
-
-      const res = await axios.post(
-        `${import.meta.env.VITE_BACKEND_URL}/chats`,
-        newChat,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-
-      const updatedChat = {
-        sessionId: res.data.sessionId,
+      const newMessage = {
         prompt: query,
-        response: bedrockResponse,
-        messages: res.data.messages,
-        _id: res.data._id,
-        timestamp: res.data.timestamp || res.data.createdAt,
+        response: lambdaData.response || "No response received",
+        sessionId: selectedChat.sessionId,
       };
 
-      setSearchHistory((prev) => [...prev, updatedChat]);
-      setSelectedChat(updatedChat);
-      setResponse(bedrockResponse);
+      const chatEndpoint = `${backendUrl}/api/chats`;
+      const { data } = await axios.post(chatEndpoint, newMessage, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      setSearchHistory(prev => [data.chat, ...prev]);
+      setSelectedChat(data.chat);
+      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
     } catch (error) {
-      console.error("Error in handleSearch:", error.message);
-      setResponse(`Error: ${error.message}`);
+      console.error("Error:", error.response || error);
+      alert(`Error: ${error.response?.status === 404 ? "404: Check backend route" : error.message}`);
     } finally {
       setIsLoading(false);
       setQuery("");
     }
   };
 
-  const handleHistoryClick = (chat) => {
-    setSelectedChat(chat);
-    setResponse(chat.messages[0]?.response || "No response available");
-  };
-
-  const toggleHistory = () => {
-    setIsHistoryOpen(!isHistoryOpen);
-  };
-
-  const truncateText = (text, maxLength = 20) => {
-    if (!text) return "Untitled";
-    return text.length <= maxLength ? text : `${text.substring(0, maxLength - 3)}...`;
-  };
+  const truncateText = (text, maxLength = 25) => 
+    text?.length > maxLength ? `${text.substring(0, maxLength)}...` : text || "New Chat";
 
   return (
-    <div className="flex min-h-screen bg-gray-100 text-black">
-      {/* Main Chat Area */}
-      <div className={`flex-1 flex flex-col p-4 transition-all duration-300 ${isHistoryOpen ? "pr-1/4" : "pr-0"}`}>
-        <div className="flex justify-between items-center mb-4">
-          <div className="text-xl font-bold text-black">Hi {username}!</div>
-          <div className="flex items-center space-x-4">
-            <button onClick={handleLogout} className="text-2xl text-black cursor-pointer">
-              <FaSignOutAlt />
-            </button>
-            {!isHistoryOpen && (
-              <button onClick={toggleHistory} className="text-2xl text-black cursor-pointer">
-                <FaBars />
-              </button>
+    <div className="bg-gray-100 flex flex-col overflow-hidden overflow-auto-y" style={{ height: 'calc(120vh - 64px)' }}>
+      <nav className="bg-black text-white p-4 flex justify-between items-center">
+        <div className="text-xl font-bold">Welcome {username}</div>
+        <button onClick={handleLogout} className="text-2xl hover:text-gray-300">
+          <FaSignOutAlt />
+        </button>
+      </nav>
+
+      <div className="flex flex-1" style={{ height: 'calc(100vh - 64px)' }}>
+        {/* Left Section - AWS Monitoring */}
+        <div className="w-1/4 bg-black flex flex-col border-r border-gray-300">
+          <div className="p-4 border-b border-gray-300 text-white">
+            <h2 className="text-lg font-semibold mb-3">AWS Monitoring</h2>
+            <div className="space-y-2">
+              <p className="text-sm"><span className="font-medium">Invocations:</span> {metrics.invocations}</p>
+              <p className="text-sm">
+                <span className="font-medium">Avg Duration:</span> {metrics.avgDuration.toFixed(2)}ms
+              </p>
+            </div>
+          </div>
+          <div className="flex-1 overflow-auto p-4">
+            <h3 className="text-sm font-medium mb-3 text-white">Recent Logs</h3>
+            {logs.length > 0 ? (
+              <ul className="space-y-2">
+                {logs.map((log, i) => (
+                  <li key={i} className="bg-white p-2 rounded text-sm break-words shadow-sm">
+                    <div className="text-xs text-gray-500 mb-1">{log.timestamp}</div>
+                    <div className="font-mono">{log.message}</div>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-sm text-gray-500">No logs available</p>
             )}
           </div>
         </div>
 
-        <div className="flex items-center justify-between mb-2">
-          <h3 className="text-lg font-semibold">
-            {selectedChat ? "Current Chat" : "New Chat"}
-          </h3>
-          {selectedChat && (
+        {/* Middle Section - Chat Interface */}
+        <div className="flex-1 flex flex-col bg-white">
+          <div className="p-4 border-b border-gray-300 flex justify-between items-center overflow-auto-y">
+            <h2 className="text-lg font-semibold">
+              {selectedChat?.messages?.length ? "Current Chat" : "New Chat"}
+            </h2>
             <button
               onClick={handleNewChat}
-              className="px-3 py-1 bg-blue-500 text-white rounded text-sm hover:bg-blue-600"
+              className="px-3 py-1 bg-blue-500 text-white rounded-md hover:bg-blue-600 text-sm"
             >
               New Chat
-            </button>
-          )}
-        </div>
-
-        <div className="flex-1 bg-black text-white p-4 rounded-lg shadow-md overflow-y-auto mb-4">
-          {isLoading ? (
-            <div className="flex justify-center">
-              <ClipLoader color="#ffffff" size={30} />
-            </div>
-          ) : selectedChat ? (
-            <div className="space-y-4">
-              <div className="flex justify-end">
-                <div className="bg-gray-700 text-white p-3 rounded-lg max-w-xs">
-                  {selectedChat.prompt || "No prompt available"}
-                </div>
-              </div>
-              <div className="flex justify-start">
-                <div className="bg-gray-800 text-white p-3 rounded-lg max-w-xs">
-                  {selectedChat.response || "No response available"}
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="flex flex-col items-center justify-center h-full">
-              <FaRobot className="text-6xl mb-2" />
-              <p className="text-xl font-semibold">Your AWS Debugger</p>
-              <p className="text-gray-400 text-sm mt-2">Start a new conversation</p>
-            </div>
-          )}
-        </div>
-
-        <div className="bg-gray-100 p-3 rounded-lg shadow-md w-full flex items-center max-w-2xl mx-auto">
-          <input
-            type="text"
-            placeholder="Ask anything..."
-            className="flex-grow p-3 text-lg outline-none border border-gray-300 rounded-md"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyPress={(e) => e.key === "Enter" && handleSearch()}
-          />
-          <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileUpload} />
-          <button
-            className="bg-black text-white px-4 py-3 text-lg ml-2 rounded-md cursor-pointer"
-            onClick={() => fileInputRef.current.click()}
-          >
-            <FaPlus />
-          </button>
-          <button
-            className="bg-black text-white px-4 py-3 text-lg ml-2 rounded-md cursor-pointer"
-            onClick={handleSearch}
-            disabled={isLoading}
-          >
-            <FaSearch />
-          </button>
-        </div>
-      </div>
-
-      {/* Chat History Sidebar */}
-      <div
-        className={`h-full bg-white shadow-lg transition-all duration-300 ease-in-out ${
-          isHistoryOpen ? "w-1/4" : "w-0"
-        } overflow-hidden flex flex-col`}
-      >
-        <div className="flex justify-between items-center p-4 border-b">
-          <h2 className="text-xl font-bold">AWS Debugger</h2>
-          <div className="flex items-center space-x-2">
-            <button
-              onClick={handleNewChat}
-              className="px-3 py-1 bg-blue-500 text-white rounded text-sm hover:bg-blue-600"
-            >
-              New Chat
-            </button>
-            <button onClick={toggleHistory} className="text-2xl text-black cursor-pointer">
-              <FaBars />
             </button>
           </div>
-        </div>
-        <div className="flex-1 overflow-y-auto p-4">
-          {searchHistory.length > 0 ? (
-            searchHistory.map((item) => (
-              <div
-                key={item._id}
-                className={`h-16 p-3 mb-2 rounded-lg cursor-pointer transition-colors ${
-                  selectedChat?._id === item._id ? "bg-gray-300" : "bg-gray-200 hover:bg-gray-300"
-                } flex items-center`}
-                onClick={() => handleHistoryClick(item)}
-              >
-                <p className="text-sm text-gray-700 truncate">
-                  {truncateText(item.messages[0]?.prompt || "Untitled chat")}
-                </p>
+          
+          <div ref={chatContainerRef} className="flex-1 overflow-auto p-4 space-y-4">
+            {isLoading ? (
+              <div className="h-full flex items-center justify-center">
+                <ClipLoader color="#3B82F6" size={40} />
               </div>
-            ))
-          ) : (
-            <p className="text-sm text-gray-400">No search history yet.</p>
-          )}
+            ) : selectedChat?.messages?.length ? (
+              selectedChat.messages.map((msg, i) => (
+                <div key={i} className="space-y-4">
+                  <div className="flex justify-end">
+                    <div className="bg-blue-500 text-white p-3 rounded-lg max-w-3xl">
+                      {msg.prompt}
+                    </div>
+                  </div>
+                  <div className="flex justify-start">
+                    <div className="bg-gray-100 p-3 rounded-lg max-w-3xl">
+                      {msg.response}
+                    </div>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="h-full flex flex-col items-center justify-center text-black">
+                <FaRobot className="text-6xl mb-4" />
+                <p className="text-xl font-semibold">AWS Support Assistant</p>
+                <p className="mt-2">Start chatting with your AWS resources</p>
+              </div>
+            )}
+          </div>
+
+          <div className="p-4 border-t border-gray-300">
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
+                placeholder="Ask about your AWS resources..."
+                className="flex-1 p-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                disabled={isLoading}
+              />
+              <button
+                onClick={handleSearch}
+                disabled={isLoading}
+                className="p-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 disabled:opacity-50"
+              >
+                <FaSearch className="text-lg" />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Right Section - Chat History */}
+        <div className="w-1/4 bg-gray-50 border-l border-gray-300">
+          <div className="p-4 border-b border-gray-300">
+            <h2 className="text-lg font-semibold">Chat History</h2>
+          </div>
+          <div className="overflow-auto h-[calc(100vh-112px)]">
+            {searchHistory.map((chat) => (
+              <div
+                key={chat.sessionId}
+                onClick={() => setSelectedChat(chat)}
+                className={`p-3 border-b border-gray-200 cursor-pointer hover:bg-gray-100 ${
+                  selectedChat?.sessionId === chat.sessionId ? "bg-blue-50" : ""
+                }`}
+              >
+                <div className="text-sm font-medium text-gray-700">
+                  {truncateText(chat.messages[0]?.prompt)}
+                </div>
+                <div className="text-xs text-gray-500 mt-1">
+                  {new Date(chat.sessionId).toLocaleDateString()}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     </div>
